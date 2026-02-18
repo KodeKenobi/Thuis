@@ -1,0 +1,96 @@
+{
+  "expo": {
+    "name": "ThuisApp",
+    "slug": "ThuisApp",
+    "version": "1.4.6",
+    "orientation": "portrait",
+    "newArchEnabled": true,
+    "icon": "./src/assets/app-icons/icon.png",
+    "scheme": "myapp",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "userInterfaceStyle": "automatic",
+      "supportsTablet": true,
+      "bundleIdentifier": "com.ThuisApp",
+      "googleServicesFile": "./GoogleService-Info.plist",
+      "infoPlist": {
+        "RNFirebaseAnalyticsWithoutAdIdSupport": true,
+        "NSCameraUsageDescription": "This app uses the camera to take photos for uploads.",
+        "NSPhotoLibraryUsageDescription": "This app needs access to your photo library to upload images.",
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSFaceIDUsageDescription": "Allow this app to use Face ID for secure authentication."
+      }
+    },
+    "android": {
+      "userInterfaceStyle": "automatic",
+      "googleServicesFile": "./google-services.json",
+      "adaptiveIcon": {
+        "foregroundImage": "./src/assets/app-icons/icon.png",
+        "backgroundColor": "#2962ff"
+      },
+      "package": "com.Thuis.App",
+      "icon": "./src/assets/app-icons/icon.png",
+      "softwareKeyboardLayoutMode": "pan",
+      "compileSdkVersion": 35,
+      "targetSdkVersion": 35
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static",
+      "favicon": "./src/assets/app-icons/icon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-web-browser",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./src/assets/app-icons/splash-icon.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#2962ff",
+          "dark": {
+            "image": "./src/assets/app-icons/splash-icon.png",
+            "backgroundColor": "#2962ff"
+          },
+          "imageWidth": 140,
+          "enableFullScreenImage_legacy": false
+        }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Allow $(PRODUCT_NAME) to use Face ID."
+        }
+      ],
+      "./plugins/with-16kb-page-size",
+      "./plugins/with-proguard-mapping",
+      "@react-native-firebase/app",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "useFrameworks": "static",
+            "forceStaticLinking": ["RNFBApp", "RNFBAnalytics"]
+          }
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "ccd30d04-a986-4b14-b7cb-03d981ae4d43"
+      }
+    },
+    "owner": "platformdatabalk-org",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/ccd30d04-a986-4b14-b7cb-03d981ae4d43",
+      "fallbackToCacheTimeout": 0
+    }
+  }
+}

@@ -1,0 +1,1 @@
+type TThemeType = "light" | "dark" | "system";

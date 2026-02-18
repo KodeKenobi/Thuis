@@ -1,0 +1,227 @@
+name: Release and Update
+
+on:
+  push:
+    branches:
+      - "release/*"
+      - "staging-release/*"
+      - "updates/**"
+      - "staging-updates/**"
+
+jobs:
+  productionRelease:
+    name: Production Release (App Store + Play Store)
+    if: startsWith(github.ref, 'refs/heads/release/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.x"
+
+      - name: Setup EAS CLI
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Extract version and update app.json
+        id: version_step
+        run: |
+          # github.ref is refs/heads/release/x.y.z
+          BRANCH_NAME=${GITHUB_REF#refs/heads/}
+          VERSION=${BRANCH_NAME#release/}
+          echo "Extracted version from branch: $VERSION"
+
+          # Save current version from app.json
+          CURRENT_VERSION=$(node -p "require('./app.json').expo.version")
+          echo "Current version in app.json: $CURRENT_VERSION"
+          echo "Target version for release: $VERSION"
+
+          # Set target version in app.json
+          node -e "const fs = require('fs'); const config = JSON.parse(fs.readFileSync('app.json')); config.expo.version = '$VERSION'; fs.writeFileSync('app.json', JSON.stringify(config, null, 2));"
+          echo "Set version to $VERSION in app.json"
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+
+      - name: Build and submit to App Store & Google Play
+        run: |
+          npm run submit:android
+          npm run submit:ios
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Commit version change to release branch
+        run: |
+          VERSION="${{ steps.version_step.outputs.version }}"
+          BRANCH_NAME="${{ steps.version_step.outputs.branch_name }}"
+
+          git config user.name "GitHub Action"
+          git config user.email "action@github.com"
+
+          git add app.json
+          git commit -m "chore: update version to $VERSION for release" || echo "No changes to commit"
+          git push origin "$BRANCH_NAME" || echo "Nothing to push"
+          echo "Committed version change to release branch"
+
+      # - name: Create PR to develop branch
+      #   env:
+      #     GH_TOKEN: ${{ secrets.TOKEN }}
+      #   run: |
+      #     VERSION="${{ steps.version_step.outputs.version }}"
+      #     SOURCE_BRANCH="${{ steps.version_step.outputs.branch_name }}"
+      #     TARGET_BRANCH="develop"
+      #     PR_TITLE="chore: merge release $VERSION to develop"
+      #     PR_DESCRIPTION="Automated PR: Merging version $VERSION from release branch to develop"
+
+      #     # Check if PR already exists
+      #     PR_EXISTS=$(gh pr list --head "$SOURCE_BRANCH" --base "$TARGET_BRANCH" --json number --jq '.[0].number')
+
+      #     if [ -z "$PR_EXISTS" ]; then
+      #       gh pr create --title "$PR_TITLE" --body "$PR_DESCRIPTION" --base "$TARGET_BRANCH" --head "$SOURCE_BRANCH"
+      #       echo "Created PR to merge $SOURCE_BRANCH into $TARGET_BRANCH"
+      #     else
+      #       echo "PR #$PR_EXISTS already exists"
+      #     fi
+
+  stagingRelease:
+    name: Staging Release (Internal Track)
+    if: startsWith(github.ref, 'refs/heads/staging-release/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.x"
+
+      - name: Setup EAS CLI
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Extract version and update app.json
+        id: version_step
+        run: |
+          # github.ref is refs/heads/staging-release/x.y.z
+          BRANCH_NAME=${GITHUB_REF#refs/heads/}
+          VERSION=${BRANCH_NAME#staging-release/}
+          echo "Extracted version from branch: $VERSION"
+
+          # Set target version in app.json
+          node -e "const fs = require('fs'); const config = JSON.parse(fs.readFileSync('app.json')); config.expo.version = '$VERSION'; fs.writeFileSync('app.json', JSON.stringify(config, null, 2));"
+          echo "Set version to $VERSION in app.json"
+
+      - name: Build and submit Staging
+        run: |
+          npm run submit:staging:android
+          npm run submit:staging:ios
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+  otaUpdate:
+    name: Production OTA Update
+    if: startsWith(github.ref, 'refs/heads/updates/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.x"
+
+      - name: Setup EAS CLI
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Publish OTA update to production channel
+        run: |
+          # github.ref is refs/heads/updates/VERSION/MESSAGE
+          BRANCH_NAME=${GITHUB_REF#refs/heads/}
+
+          # Remove 'updates/' prefix
+          BRANCH_PARTS="${BRANCH_NAME#updates/}"
+
+          # Extract version (first segment)
+          VERSION=$(echo "$BRANCH_PARTS" | cut -d'/' -f1)
+          # Extract message (rest)
+          MESSAGE=$(echo "$BRANCH_PARTS" | cut -d'/' -f2-)
+
+          UPDATE_MESSAGE="${MESSAGE:-Production OTA update for version $VERSION}"
+
+          # Set version
+          node -e "const fs = require('fs'); const config = JSON.parse(fs.readFileSync('app.json')); config.expo.version = '$VERSION'; fs.writeFileSync('app.json', JSON.stringify(config, null, 2));"
+
+          # Publish update
+          npm run update:prod -- --message "$UPDATE_MESSAGE"
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+
+  stagingUpdate:
+    name: Staging OTA Update
+    if: startsWith(github.ref, 'refs/heads/staging-updates/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.x"
+
+      - name: Setup EAS CLI
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Publish OTA update to staging channel
+        run: |
+          # github.ref is refs/heads/staging-updates/VERSION/MESSAGE
+          BRANCH_NAME=${GITHUB_REF#refs/heads/}
+
+          # Remove 'staging-updates/' prefix
+          BRANCH_PARTS="${BRANCH_NAME#staging-updates/}"
+
+          # Extract version (first segment)
+          VERSION=$(echo "$BRANCH_PARTS" | cut -d'/' -f1)
+          # Extract message (rest)
+          MESSAGE=$(echo "$BRANCH_PARTS" | cut -d'/' -f2-)
+
+          UPDATE_MESSAGE="${MESSAGE:-Staging OTA update for version $VERSION}"
+
+          # Set version
+          node -e "const fs = require('fs'); const config = JSON.parse(fs.readFileSync('app.json')); config.expo.version = '$VERSION'; fs.writeFileSync('app.json', JSON.stringify(config, null, 2));"
+
+          # Publish update
+          npm run update:staging -- --message "$UPDATE_MESSAGE"
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}

@@ -1,0 +1,201 @@
+trigger:
+  branches:
+    include:
+      # - master
+      - release/*
+      - updates/*
+
+stages:
+  - stage: Build
+    displayName: Build Stage
+    jobs:
+      # - job: masterBuild
+      #   displayName: Build Only (Expo Go)
+      #   condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/master'))
+      #   pool:
+      #     vmImage: 'ubuntu-latest'
+      #   steps:
+      #     - checkout: self
+      #       clean: true
+
+      #     - task: NodeTool@0
+      #       inputs:
+      #         versionSpec: '20.x'
+      #       displayName: Install Node.js
+
+      #     - script: |
+      #         npm install
+      #         npm install -g eas-cli
+      #       displayName: Install dependencies and EAS CLI
+
+      #     - script: eas build --platform all --profile preview --non-interactive --no-wait
+      #       displayName: Build (Expo Go only)
+
+      - job: productionRelease
+        displayName: Full Release (App Store + Play Store)
+        condition: and(succeeded(), startsWith(variables['Build.SourceBranch'], 'refs/heads/release/'))
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - checkout: self
+            persistCredentials: 'true'
+
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '20.x'
+            displayName: Install Node.js
+
+          - script: |
+              npm install
+              npm install -g eas-cli
+            displayName: Install dependencies and EAS CLI
+
+          - script: |
+              # Build.SourceBranch includes refs/heads/, so we need to remove that prefix
+              FULL_BRANCH="$(Build.SourceBranch)"
+              BRANCH_NAME="${FULL_BRANCH#refs/heads/}"
+              VERSION="${BRANCH_NAME#release/}"
+              echo "Extracted version from branch: $VERSION"
+              
+              # Save current version from app.json
+              CURRENT_VERSION=$(node -p "require('./app.json').expo.version")
+              echo "Current version in app.json: $CURRENT_VERSION"
+              echo "Target version for release: $VERSION"
+              
+              # Set target version in app.json
+              node -e "const fs = require('fs'); const config = JSON.parse(fs.readFileSync('app.json')); config.expo.version = '$VERSION'; fs.writeFileSync('app.json', JSON.stringify(config, null, 2));"
+              echo "Set version to $VERSION in app.json"
+            displayName: Extract version and update app.json
+
+          - script: |
+              eas build --platform android --profile production --non-interactive --auto-submit --no-wait
+              eas build --platform ios --profile production --non-interactive --auto-submit --no-wait
+            displayName: Build and submit to App Store & Google Play
+
+          - script: |
+              # Build.SourceBranch includes refs/heads/, so we need to remove that prefix
+              FULL_BRANCH="$(Build.SourceBranch)"
+              BRANCH_NAME="${FULL_BRANCH#refs/heads/}"
+              VERSION="${BRANCH_NAME#release/}"
+              
+              # Configure git
+              git config user.name "Azure Pipeline"
+              git config user.email "azure-pipeline@noreply.com"
+              
+              # Commit version change to release branch
+              git add app.json
+              git commit -m "chore: update version to $VERSION for release" || echo "No changes to commit"
+              git push origin "$BRANCH_NAME" || echo "Nothing to push"
+              echo "Committed version change to release branch"
+            displayName: Commit version change to release branch
+
+          - script: |
+              # Build.SourceBranch includes refs/heads/, so we need to remove that prefix
+              FULL_BRANCH="$(Build.SourceBranch)"
+              BRANCH_NAME="${FULL_BRANCH#refs/heads/}"
+              VERSION="${BRANCH_NAME#release/}"
+              SOURCE_BRANCH="$BRANCH_NAME"
+              TARGET_BRANCH="develop"
+              
+              # Create PR using Azure DevOps REST API
+              AUTH=$(echo -n ":$SYSTEM_ACCESSTOKEN" | base64)
+              ORG_URL="$(System.CollectionUri)"
+              PROJECT="$(System.TeamProject)"
+              REPO_ID="$(Build.Repository.ID)"
+              
+              PR_TITLE="chore: merge release $VERSION to develop"
+              PR_DESCRIPTION="Automated PR: Merging version $VERSION from release branch to develop"
+              
+              PR_BODY=$(cat <<EOF
+              {
+                "sourceRefName": "refs/heads/$SOURCE_BRANCH",
+                "targetRefName": "refs/heads/$TARGET_BRANCH",
+                "title": "$PR_TITLE",
+                "description": "$PR_DESCRIPTION"
+              }
+              EOF
+              )
+              
+              RESPONSE=$(curl -X POST \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Basic $AUTH" \
+                -d "$PR_BODY" \
+                "$ORG_URL$PROJECT/_apis/git/repositories/$REPO_ID/pullrequests?api-version=7.1" 2>/dev/null)
+              
+              if echo "$RESPONSE" | grep -q '"pullRequestId"'; then
+                PR_ID=$(echo "$RESPONSE" | grep -o '"pullRequestId":[0-9]*' | grep -o '[0-9]*')
+                echo "Created PR #$PR_ID: $PR_TITLE"
+              else
+                echo "PR might already exist or failed to create. Response: $RESPONSE"
+              fi
+            displayName: Create PR to develop branch
+            env:
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+      - job: otaUpdate
+        displayName: OTA Update Release
+        condition: and(succeeded(), startsWith(variables['Build.SourceBranch'], 'refs/heads/updates/'))
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - checkout: self
+
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '20.x'
+            displayName: Install Node.js
+
+          - script: |
+              npm install
+              npm install -g eas-cli
+            displayName: Install dependencies and EAS CLI
+
+          - script: |
+              # Build.SourceBranch includes refs/heads/, so we need to remove that prefix
+              FULL_BRANCH="$(Build.SourceBranch)"
+              BRANCH_NAME="${FULL_BRANCH#refs/heads/}"
+              echo "Full branch ref: $FULL_BRANCH"
+              echo "Branch name: $BRANCH_NAME"
+              
+              # Extract version and message from branch name
+              # Format: updates/VERSION/MESSAGE
+              if [[ ! "$BRANCH_NAME" =~ ^updates/ ]]; then
+                echo "Error: Branch name must start with 'updates/'"
+                exit 1
+              fi
+              
+              # Remove 'updates/' prefix
+              BRANCH_PARTS="${BRANCH_NAME#updates/}"
+              echo "After removing 'updates/': $BRANCH_PARTS"
+              
+              # Extract version (first segment after updates/)
+              VERSION=$(echo "$BRANCH_PARTS" | cut -d'/' -f1)
+              # Extract message (everything after version/)
+              MESSAGE=$(echo "$BRANCH_PARTS" | cut -d'/' -f2-)
+              
+              if [ -z "$VERSION" ]; then
+                echo "Error: Could not extract version from branch name"
+                exit 1
+              fi
+              
+              UPDATE_MESSAGE="${MESSAGE:-Production OTA update for version $VERSION}"
+              
+              # Save current version from app.json
+              CURRENT_VERSION=$(node -p "require('./app.json').expo.version")
+              echo "Current version in app.json: $CURRENT_VERSION"
+              echo "Extracted version: $VERSION"
+              echo "Extracted message: $MESSAGE"
+              echo "Target version for update: $VERSION"
+              echo "Update message: $UPDATE_MESSAGE"
+              
+              # Set target version in app.json to ensure correct runtime version
+              node -e "const fs = require('fs'); const config = JSON.parse(fs.readFileSync('app.json')); config.expo.version = '$VERSION'; fs.writeFileSync('app.json', JSON.stringify(config, null, 2));"
+              echo "Set version to $VERSION in app.json"
+              
+              # Publish update with cleared cache
+              eas update --clear-cache --branch production --message "$UPDATE_MESSAGE" --environment production --non-interactive
+              
+              # Restore original version
+              node -e "const fs = require('fs'); const config = JSON.parse(fs.readFileSync('app.json')); config.expo.version = '$CURRENT_VERSION'; fs.writeFileSync('app.json', JSON.stringify(config, null, 2));"
+              echo "Restored version to $CURRENT_VERSION in app.json"
+            displayName: Publish OTA update to production channel
